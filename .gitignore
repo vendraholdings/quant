@@ -1,0 +1,12 @@
+/data/
+.venv/
+jobs/logs/
+__pycache__/
+*.tmp
+
+# never commit secrets
+.env
+.env.*
+*.pem
+*.key
+secrets/

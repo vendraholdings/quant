@@ -1,0 +1,31 @@
+[project]
+name = "quant"
+version = "0.1.0"
+description = "Quant finance and ML research on Apple Silicon (MLX, LightGBM, polars)"
+requires-python = ">=3.12"
+dependencies = [
+    "cvxpy>=1.9.3",
+    "duckdb>=2.0.0",
+    "jupyterlab>=4.6.6",
+    "lightgbm>=4.7.0",
+    "matplotlib>=3.11.2",
+    "mlx>=0.32.4",
+    "numba>=0.68.1",
+    "numpy>=2.5.5",
+    "pandas>=3.1.1",
+    "polars>=2.1.0",
+    "pyarrow>=26.0.1",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "torch>=2.15.0",
+    "vectorbt>=1.2.1",
+    "xgboost>=3.4.1",
+    "yfinance>=1.8.0",
+]
+
+[project.scripts]
+quant = "quant:main"
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"

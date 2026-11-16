@@ -1,0 +1,19 @@
+# ETFs / benchmarks
+SPY
+QQQ
+IWM
+TLT
+GLD
+# large caps
+AAPL
+MSFT
+NVDA
+AMZN
+GOOGL
+META
+JPM
+XOM
+JNJ
+# crypto
+BTC-USD
+ETH-USD
