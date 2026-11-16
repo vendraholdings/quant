@@ -30,7 +30,38 @@ FEATS = ["mom_5", "mom_21", "mom_63", "mom_126", "mom_252", "mom_12_1", "vol_21"
 
 
 # ---------------------------------------------------------------- panel
-def build_panel(prices_dir: Path, tickers: list[str], min_names: int) -> pl.DataFrame:
+EARN_FEATS = ["e_days_since", "e_days_to", "e_last_surprise", "e_last_move", "e_exp_move"]
+META = ("date", "di", "ticker", "y", "fwd")
+
+
+def add_earnings(lf: pl.LazyFrame, events: Path, earnings_dir: Path) -> pl.LazyFrame:
+    """As-of joins only: last event whose reaction is complete (avail_date <= date) and next scheduled date."""
+    ev = (pl.scan_parquet(events).select("ticker", "avail_date", "surprise_pct", "ab_move", "exp_move")
+            .rename({"surprise_pct": "e_last_surprise", "ab_move": "e_last_move", "exp_move": "e_exp_move"})
+            .sort("avail_date"))
+    nxt = pl.scan_parquet(earnings_dir / "*.parquet").select("ticker", pl.col("edate").alias("next_edate")).sort("next_edate")
+    days = lambda a, b: (a - b).dt.total_days()  # noqa: E731
+    return (lf.sort("date")
+              .join_asof(ev, left_on="date", right_on="avail_date", by="ticker", strategy="backward")
+              .join_asof(nxt, left_on="date", right_on="next_edate", by="ticker", strategy="forward")
+              .with_columns(days(pl.col("date"), pl.col("avail_date")).alias("e_days_since"),
+                            days(pl.col("next_edate"), pl.col("date")).alias("e_days_to"))
+              .with_columns(pl.when(pl.col("e_days_since") <= 120).then(pl.col(c)).alias(c)
+                            for c in ["e_days_since", "e_last_surprise", "e_last_move", "e_exp_move"])
+              .with_columns(pl.when(pl.col("e_days_to") <= 100).then(pl.col("e_days_to")).alias("e_days_to"))
+              .drop("avail_date", "next_edate"))
+
+
+def pit_filter(lf: pl.LazyFrame, members: Path) -> pl.LazyFrame:
+    """Keep (ticker, date) only if the ticker was an S&P 500 member on that date."""
+    m = pl.scan_parquet(members)
+    snaps = m.select("snap_date").unique().sort("snap_date")
+    return (lf.sort("date").join_asof(snaps, left_on="date", right_on="snap_date", strategy="backward")
+              .join(m, on=["snap_date", "ticker"], how="semi").drop("snap_date"))
+
+
+def build_panel(prices_dir: Path, tickers: list[str], min_names: int, events: Path | None = None,
+                earnings_dir: Path | None = None, members: Path | None = None) -> pl.DataFrame:
     px, r, ldv = pl.col("adj_close"), pl.col("r1"), pl.col("ldv")
     lf = (pl.scan_parquet(prices_dir / "*.parquet").filter(pl.col("ticker").is_in(tickers))
           .sort("ticker", "date")
@@ -50,12 +81,19 @@ def build_panel(prices_dir: Path, tickers: list[str], min_names: int) -> pl.Data
               (px.shift(-H) / px - 1).over("ticker").alias("fwd"))
           .filter(pl.col("close") > 3)
           .drop_nulls(FEATS + ["fwd"])
-          .filter(pl.all_horizontal([pl.col(f).is_finite() for f in FEATS] + [pl.col("fwd").is_finite()]))
-          .filter(pl.len().over("date") >= min_names)
-          .with_columns(*[((pl.col(f).rank() / pl.len()).over("date") - 0.5).cast(pl.Float32).alias(f) for f in FEATS],
-                        ((pl.col("fwd").rank() / pl.len()).over("date") - 0.5).cast(pl.Float32).alias("y"))
-          .with_columns(pl.col("date").rank("dense").cast(pl.Int32).alias("di"))
-          .select("date", "di", "ticker", *FEATS, "y", "fwd"))
+          .filter(pl.all_horizontal([pl.col(f).is_finite() for f in FEATS] + [pl.col("fwd").is_finite()])))
+    feats = list(FEATS)
+    if members:
+        lf = pit_filter(lf, members)
+    if events and earnings_dir:
+        lf, feats = add_earnings(lf, events, earnings_dir), feats + EARN_FEATS
+    # rank-normalise per date to [-0.5, 0.5]; missing earnings info -> 0 (cross-sectional median)
+    lf = (lf.filter(pl.len().over("date") >= min_names)
+            .with_columns(*[((pl.col(f).rank() / pl.col(f).count()).over("date") - 0.5).fill_null(0.0).fill_nan(0.0)
+                            .cast(pl.Float32).alias(f) for f in feats],
+                          ((pl.col("fwd").rank() / pl.len()).over("date") - 0.5).cast(pl.Float32).alias("y"))
+            .with_columns(pl.col("date").rank("dense").cast(pl.Int32).alias("di"))
+            .select("date", "di", "ticker", *feats, "y", "fwd"))
     return lf.collect().sort("date", "ticker")
 
 
@@ -153,7 +191,8 @@ def _load(panel: str) -> dict:
     global _P
     if _P is None:
         df = pl.read_parquet(panel)
-        _P = dict(X=df.select(FEATS).to_numpy().astype(np.float32), y=df["y"].to_numpy(),
+        feats = [c for c in df.columns if c not in META]  # whatever features the panel was built with
+        _P = dict(X=df.select(feats).to_numpy().astype(np.float32), y=df["y"].to_numpy(),
                   day=df["date"].cast(pl.Int32).to_numpy(), di=df["di"].to_numpy(),
                   year=df["date"].dt.year().to_numpy(), meta=df.select("date", "ticker", "fwd"))
     return _P
@@ -318,6 +357,11 @@ def main() -> None:
     p.add_argument("--prices-dir", default="data/prices")
     p.add_argument("--out", default="data/panel.parquet")
     p.add_argument("--min-names", type=int, default=100)
+    p.add_argument("--events", type=Path, help="data/earnings_events.parquet -> adds earnings features")
+    p.add_argument("--earnings-dir", type=Path, default=Path("data/earnings"))
+    p.add_argument("--members", type=Path, help="data/members.parquet -> point-in-time S&P filter")
+    c = sp.add_parser("compare")
+    c.add_argument("dirs", nargs="+")
     s = sp.add_parser("sweep")
     s.add_argument("--model", choices=["lgb", "mlx"], required=True)
     s.add_argument("--panel", default="data/panel.parquet")
@@ -334,12 +378,22 @@ def main() -> None:
     a = ap.parse_args()
     if a.cmd == "panel":
         from quant.data.prices import read_tickers
-        df = build_panel(Path(a.prices_dir), read_tickers(Path(a.tickers_file)), a.min_names)
+        df = build_panel(Path(a.prices_dir), read_tickers(Path(a.tickers_file)), a.min_names,
+                         a.events, a.earnings_dir if a.events else None, a.members)
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         df.write_parquet(a.out)
         print(f"panel {df.shape} {df['date'].min()} -> {df['date'].max()} names/date {df.group_by('date').len()['len'].median()}")
     elif a.cmd == "sweep":
         sweep(a)
+    elif a.cmd == "compare":  # same search space, different data: compare the whole trial distributions
+        print("| results | model | trials | median Sharpe net | 90th pct | best | median IC |\n|---|---|---|---|---|---|---|")
+        for d in a.dirs:
+            for m in ("lgb", "mlx"):
+                f = Path(d) / f"{m}.jsonl"
+                if f.exists():
+                    t = pl.read_ndjson(f)
+                    s = t["sharpe_net"]
+                    print(f"| {d} | {m} | {t.height} | {s.median():.2f} | {s.quantile(.9):.2f} | {s.max():.2f} | {t['mean_ic'].median():.4f} |")
     else:
         report(a)
 
