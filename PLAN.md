@@ -16,8 +16,11 @@ Runs locally on an Apple Silicon Mac; env managed by `uv` (Python 3.12). Setup: 
 3. [x] Daily price data lake (`src/quant/data/prices.py`, universe in `config/universe.txt`)
 4. [x] Model pause + night runner (`scripts/model_pause.sh`, `scripts/night.sh`)
 5. [ ] Schedule night runner (launchd, ~02:00)
-6. [ ] Expand universe to S&P 500 + add FRED macro data
-7. [ ] Factor research: momentum/value/low-vol, LightGBM cross-sectional ranker, purged walk-forward CV
+6. [x] S&P 500 universe since 2000 (`quant.data.universe`); [ ] FRED macro data
+7. [x] Cross-sectional ranker (`quant.research.xsec`): 14 price/volume features, walk-forward LightGBM + MLX MLP
+   random search, decile long-short backtest, Deflated Sharpe + GPU block bootstrap.
+   Overnight: `nohup scripts/overnight.sh 06:00 06:30 &` (stop new work, hard reload deadline)
+   [ ] add value/quality fundamentals; [ ] point-in-time universe to remove survivorship bias
 8. [ ] Portfolio construction (mean-variance, HRP) with transaction costs
 9. [ ] Options: Black-Scholes, MLX Monte Carlo, implied-vol surface
 10. [ ] Deep learning on crypto order-book data (MLX)
@@ -27,6 +30,7 @@ Runs locally on an Apple Silicon Mac; env managed by `uv` (Python 3.12). Setup: 
     uv run python scripts/check_hw.py                 # expect ALL CHECKS PASSED
     uv run python -m quant.data.prices                # expect failed 0
     scripts/model_pause.sh run <cmd>                  # pause model, run cmd, reload
+    uv run python -m quant.research.xsec report       # reports/overnight.md + .png
     scripts/night.sh                                  # empty queue -> "queue empty", model untouched
 
 ## Baseline numbers (2026-11-16)

@@ -46,7 +46,8 @@ def update_ticker(ticker: str, start: date, out: Path) -> tuple[str, int, bool]:
     path = out / f"{ticker.replace('/', '_')}.parquet"
     try:
         old = pl.read_parquet(path) if path.exists() else pl.DataFrame(schema=SCHEMA)
-        since = old["date"].max() + timedelta(days=1) if old.height else start
+        # backfill if the requested start is earlier than what we hold, else fetch only new days
+        since = start if not old.height or start < old["date"].min() else old["date"].max() + timedelta(days=1)
         if since > date.today():
             return ticker, 0, True
         for attempt in range(3):  # yfinance's sqlite cache can throw 'database is locked' under threads
