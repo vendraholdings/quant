@@ -198,17 +198,23 @@ def _load(panel: str) -> dict:
     return _P
 
 
+def split(P: dict, yr: int) -> tuple[np.ndarray, np.ndarray]:
+    """Walk-forward masks for test year yr. Test = rebalance days in yr. Train = every 5th day ending EMBARGO
+    calendar days before yr starts: targets look H trading days ahead, so no train target overlaps the test year."""
+    te = (P["year"] == yr) & (P["di"] % H == 0)
+    start = P["day"][P["year"] == yr].min()
+    tr = (P["day"] < start - EMBARGO) & (P["di"] % 5 == 0)  # every 5th day: fewer overlapping targets
+    return tr, te
+
+
 def run_config(model: str, cfg: dict, panel: str, out_dir: str, first_year: int, deadline: float, threads: int):
     P = _load(panel)
-    reb = P["di"] % H == 0
     parts = []
     t0 = time.time()
     for yr in sorted(set(P["year"][P["year"] >= first_year].tolist())):
         if time.time() > deadline:
             return None  # out of time: drop partial config
-        te = (P["year"] == yr) & reb
-        start = P["day"][P["year"] == yr].min()
-        tr = (P["day"] < start - EMBARGO) & (P["di"] % 5 == 0)  # every 5th day: fewer overlapping targets
+        tr, te = split(P, yr)
         if te.sum() == 0 or tr.sum() < 1000:
             continue
         pred = FIT[model](cfg, P["X"][tr], P["y"][tr], P["X"][te], threads)
