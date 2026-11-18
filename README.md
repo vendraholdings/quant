@@ -9,27 +9,34 @@ Every night this project downloads S&P 500 data, builds features, and searches *
 LightGBM runs on the CPU and MLX neural nets run on the Apple GPU at the same time. Each model trades a monthly
 long-short portfolio, and the best one is then tested for **whether it beats luck**.
 
-Most backtests on GitHub stop at "look, a high Sharpe". This one asks how much of that Sharpe is just from
-trying 2,000 models, and answers with the **Deflated Sharpe Ratio** and a **1,000,000-sample GPU bootstrap**.
+Most backtests on GitHub stop at "look, a high Sharpe". This one asks two harder questions: how much of that Sharpe
+comes from trying 2,000 models, and how much comes from testing only on companies that survived to today.
 
-## Results (latest overnight run)
+## Results
 
-![equity curve](reports/overnight.png)
+| run | universe | trials | median Sharpe (net) | best Sharpe (net) | median IC |
+|---|---|---|---|---|---|
+| original | today's S&P 500 members | 1,979 | 0.80 | 1.03 | 0.036 |
+| point-in-time, price features | members on each date, incl. later removals | 993 | -0.17 | 0.07 | 0.010 |
+| point-in-time, + earnings features (LightGBM) | same | 863 | -0.03 | 0.29 | 0.013 |
+| point-in-time, + earnings features (MLX MLP) | same | 1,750 | -0.13 | 0.17 | 0.009 |
 
-| strategy | Sharpe (after costs) | CAGR (after costs) | max drawdown | mean IC |
-|---|---|---|---|---|
-| best LightGBM | 1.02 | 15.9% | -19.7% | 0.039 |
-| best MLX MLP | 1.03 | 14.9% | -17.2% | 0.039 |
-| blend of top-5s | 1.00 | 15.6% | -18.7% | 0.040 |
+**Finding: the original result was mostly survivorship bias.** On today's index members every one of the 1,979
+configurations earned a positive net Sharpe (best 1.03, Deflated Sharpe probability 99.9%). Rerun on the point-in-time
+universe, which includes companies that were later removed or went bust, the median configuration loses money after
+costs and the best reaches 0.29. Adding earnings features (surprise, timing, post-earnings drift) helps, but not
+enough to produce a strategy worth trading. Full comparison: [`reports/ab_compare.md`](reports/ab_compare.md).
 
-**Is it real?**
-- **Deflated Sharpe probability: 99.9%.** The best Sharpe you would expect from 1,979 strategies with no skill is 0.43, and the winner's 1.03 clears it comfortably.
-- **Block bootstrap, 1M resamples on the GPU in 0.2 s:** the 90% interval for Sharpe is 0.74 to 1.29, and P(Sharpe ≤ 0) ≈ 0.
+The selection-bias side (how much of the best of 1,979 is luck) is analysed in a separate project,
+[backtest-overfitting](https://github.com/vendraholdings/backtest-overfitting).
 
-**Known bias:** this run uses *today's* S&P 500 members, so companies that went bust or were removed are
-missing, which flatters returns. The fix is already built: a point-in-time membership filter (which stocks
-were in the index on each date, since 2000), tested in `tests/`. Its results replace this table after the next overnight run.
-Full report: [`reports/overnight.md`](reports/overnight.md).
+**Earnings event study** (53,531 events, 662 tickers, 2001-2026; [`reports/earnings.md`](reports/earnings.md)):
+the top surprise quintile outperforms the bottom by 1.19% over the following 60 trading days before costs, a gap
+that has narrowed since 2008. 15% of earnings moves exceed twice the stock's typical move.
+
+Original run, today's members (survivorship-biased): equity curve below; report in [`reports/overnight.md`](reports/overnight.md).
+
+![equity curve, original survivorship-biased run](reports/overnight.png)
 
 ## How it works
 
